@@ -1,0 +1,17 @@
+__pycache__/
+*.pyc
+.git/
+.gitignore
+.claude/
+.gemini/
+test/
+*.wav
+*.md
+
+.venv/
+weights/Qwen3-ASR-1.7B/
+weights/openfst/
+*.egg-info/
+.pytest_cache/
+.ruff_cache/
+.mypy_cache/

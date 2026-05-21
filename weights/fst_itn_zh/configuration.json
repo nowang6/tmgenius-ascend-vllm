@@ -1,0 +1,7 @@
+{
+    "task":"inverse-text-processing",
+    "framework": "C++",
+    "pipeline": {
+        "type": "fst_itn_zh"
+    }
+}

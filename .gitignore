@@ -1,0 +1,7 @@
+*.pyc
+__pycache__/
+*.wav
+.env
+*.egg-info/
+
+3rd-party/openfst1.8.3/lib
