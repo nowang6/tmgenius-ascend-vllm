@@ -73,16 +73,16 @@ class TenVADSession:
         self._pre_buffer: list[np.ndarray] = []
         self._pre_snapshot: list[np.ndarray] = []
 
-        # 当前语音段的帧列表
-        self._speech_frames: list[np.ndarray] = []
+        # 当前语音段：pre_snapshot（前导）+ segment_frames（入段后原始流逐帧，含静默）
+        self._segment_frames: list[np.ndarray] = []
         self._in_speech = False
         self._speech_frame_count = 0
         self._silence_frame_count = 0
-        self._post_count = 0  # 已捕获的后置帧数
 
         # 全局采样计数
         self._total_samples: int = 0
         self._speech_start_sample: int = 0
+        self._last_speech_end_sample: int = 0
 
     # ---- 公开接口 ----
 
@@ -113,17 +113,11 @@ class TenVADSession:
 
     def flush(self) -> Optional[dict]:
         """强制刷出剩余语音段（客户端发送 status=2 时调用）。"""
-        if not self._speech_frames:
+        if not self._segment_frames:
             return None
 
         speech_duration = self._speech_frame_count * self.frame_duration
-        if speech_duration < MIN_SPEECH_DURATION:
-            self._reset()
-            return None
-
-        # 后置尾帧已在正常流程中通过 post_count 逐帧捕获，
-        # flush 时 pre_buffer 与 speech_frames 尾部必然重叠，不再补充。
-        return self._extract_and_reset()
+        return self._finalize_segment(speech_duration)
 
     def close(self) -> None:
         """释放 TenVad 实例。"""
@@ -157,75 +151,102 @@ class TenVADSession:
                 self._in_speech = True
                 self._speech_frame_count = 0
                 self._silence_frame_count = 0
-                self._post_count = 0
+                self._segment_frames = []
                 self._speech_start_sample = (
                     self._total_samples - self.hop_size
                     - len(self._pre_snapshot) * self.hop_size
                 )
             self._speech_frame_count += 1
             self._silence_frame_count = 0
-            self._speech_frames.append(frame)
+            self._segment_frames.append(frame)
+            self._last_speech_end_sample = self._total_samples
         else:  # 静默
             if self._in_speech:
+                self._segment_frames.append(frame)
                 self._silence_frame_count += 1
-
-                # 捕获后置真实尾帧（前 N 个静默帧拼入语音段作为上下文）
-                if self._post_count < self._pad_frames:
-                    self._speech_frames.append(frame)
-                    self._post_count += 1
 
                 speech_dur = self._speech_frame_count * self.frame_duration
                 pause_dur = self._silence_frame_count * self.frame_duration
 
-                if _should_transcribe(speech_dur, pause_dur):
-                    return self._extract_and_reset()
+                if _should_cut_segment(speech_dur, pause_dur):
+                    return self._finalize_segment(speech_dur)
 
         # 强制触发：语音过长
         if self._in_speech:
             speech_dur = self._speech_frame_count * self.frame_duration
             if speech_dur > MAX_SPEECH_DURATION:
-                return self._extract_and_reset()
+                return self._finalize_segment(speech_dur)
 
         return None
 
+    def _compute_segment_end(self) -> int:
+        """段尾 = 最后语音帧结束 + 后置 pad（不超过已缓冲的原始流）。"""
+        pad_samples = self._pad_frames * self.hop_size
+        target_end = self._last_speech_end_sample + pad_samples
+        buffered_end = self._speech_start_sample + (
+            len(self._pre_snapshot) + len(self._segment_frames)
+        ) * self.hop_size
+        return min(target_end, buffered_end)
+
+    def _finalize_segment(self, speech_duration: float) -> Optional[dict]:
+        """切分当前段；有效语音不足 MIN_SPEECH 时丢弃。"""
+        seg = self._extract_and_reset()
+        if speech_duration < MIN_SPEECH_DURATION:
+            logger.debug(
+                "VAD segment discarded: sid=%s, speech=%.0fms < min=%.0fms",
+                self._sid,
+                speech_duration * 1000,
+                MIN_SPEECH_DURATION * 1000,
+            )
+            return None
+        return seg
+
     def _extract_and_reset(self) -> dict:
-        all_frames = self._pre_snapshot + self._speech_frames
-        audio = np.concatenate(all_frames)
         start = self._speech_start_sample
-        end = start + len(audio)
+        end = self._compute_segment_end()
+        all_frames = self._pre_snapshot + self._segment_frames
+        audio = np.concatenate(all_frames)
+        num_samples = end - start
+        if len(audio) > num_samples:
+            audio = audio[:num_samples]
         self._reset()
         return {"audio": audio, "start_sample": start, "end_sample": end}
 
     def _reset(self) -> None:
-        self._speech_frames = []
+        self._segment_frames = []
         self._pre_snapshot = []
         self._in_speech = False
         self._speech_frame_count = 0
         self._silence_frame_count = 0
-        self._post_count = 0
+        self._last_speech_end_sample = 0
 
 
 # ---- 动态阈值判定（独立函数，方便单元测试） ----
 
 
-def _should_transcribe(speech_duration: float, pause_duration: float) -> bool:
-    """
-    判断是否应触发转写。
+def _pause_threshold(speech_duration: float) -> float:
+    """给定累积语音时长，返回触发切分所需的停顿阈值（秒）。"""
+    if speech_duration >= DYNAMIC_RANGE_END:
+        return T_MIN
+    return T_MAX - K * speech_duration
 
-    动态转写触发规则：
-      - speech < MIN_SPEECH  → 不触发（短音频抑制）
-      - speech >= MAX_SPEECH → 立即触发（强制上限）
+
+def _should_cut_segment(speech_duration: float, pause_duration: float) -> bool:
+    """
+    判断是否应切分当前语音段（与有效语音是否够长无关）。
+
+    切分规则：
+      - speech >= MAX_SPEECH → 立即切分（强制上限）
       - 0s ~ DYNAMIC_RANGE_END → 停顿阈值从 T_MAX 线性递减至 T_MIN
       - DYNAMIC_RANGE_END ~ MAX_SPEECH → 停顿阈值固定为 T_MIN
     """
-    if speech_duration < MIN_SPEECH_DURATION:
-        return False
     if speech_duration >= MAX_SPEECH_DURATION:
         return True
+    return pause_duration >= _pause_threshold(speech_duration)
 
-    if speech_duration >= DYNAMIC_RANGE_END:
-        threshold = T_MIN
-    else:
-        threshold = T_MAX - K * speech_duration
 
-    return pause_duration >= threshold
+def _should_transcribe(speech_duration: float, pause_duration: float) -> bool:
+    """兼容旧调用：满足切分条件且有效语音达到 MIN_SPEECH 才转发 ASR。"""
+    if speech_duration < MIN_SPEECH_DURATION:
+        return False
+    return _should_cut_segment(speech_duration, pause_duration)
