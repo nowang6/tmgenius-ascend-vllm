@@ -1,0 +1,205 @@
+services:
+ # 单实例
+  tmgenius-agent-v2-single:
+    image: mindie:mindie_2.2.T10-800I-aarch64
+    container_name: tmgenius-agent-v2-single
+    restart: unless-stopped
+    environment:
+      NPU_VISIBLE_DEVICES: 0,1
+      MODEL_WEIGHT_PATH: /home/weights/Qwen3-30B-A3B-Instruct-2507
+      MODEL_NAME: Qwen3-30B-A3B-Instruct-2507
+      MAX_SEQ_LEN: 32768
+      MAX_INPUT_TOKEN_LEN: 32768
+    ports:
+      - "8850:1025"
+    shm_size: 1g
+    working_dir: /home
+    devices:
+      - /dev/davinci0 # 使用0号卡
+      - /dev/davinci1 # 使用1号卡
+      - /dev/davinci_manager
+      - /dev/hisi_hdc
+      - /dev/devmm_svm
+    volumes:
+      - /usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
+      - /usr/local/dcmi:/usr/local/dcmi:ro
+      - /usr/local/bin/npu-smi:/usr/local/bin/npu-smi:ro
+      - /usr/local/sbin/:/usr/local/sbin:ro
+      - ./weights/Qwen3-30B-A3B-Instruct-2507:/home/weights/Qwen3-30B-A3B-Instruct-2507:ro
+      - ./start_mindie.py:/home/start_mindie.py
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://tmgenius-agent-v2-single:1025/v1/models"]
+      interval: 300s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    command: python start_mindie.py
+
+  tmgenius-chat-80b-single:
+    image: tmgenius/vllm-ascend:v0.19.1rc1
+    container_name: tmgenius-chat-v2-single
+    shm_size: 1g
+
+    devices:
+      - /dev/davinci4
+      - /dev/davinci5
+      - /dev/davinci6
+      - /dev/davinci7
+      - /dev/davinci_manager
+      - /dev/devmm_svm
+      - /dev/hisi_hdc
+
+    environment:
+      PYTORCH_NPU_ALLOC_CONF: "expandable_segments:True"
+      OMP_NUM_THREADS: "10"
+      OMP_PROC_BIND: "false"
+      HCCL_BUFFSIZE: "1024"
+
+    volumes:
+      - /usr/local/dcmi:/usr/local/dcmi
+      - /usr/local/bin/npu-smi:/usr/local/bin/npu-smi
+      - /usr/local/Ascend/driver/lib64/:/usr/local/Ascend/driver/lib64/
+      - /usr/local/Ascend/driver/version.info:/usr/local/Ascend/driver/version.info
+      - /etc/ascend_install.info:/etc/ascend_install.info
+      - ./weights/Qwen3-Next-80B-A3B-Instruct:/workspace/Qwen3-Next-80B-A3B-Instruct
+
+    ports:
+      - "8852:8000"
+
+    working_dir: /workspace
+
+    command: >
+      vllm serve Qwen3-Next-80B-A3B-Instruct
+      --tensor-parallel-size 4
+      --max-model-len 65536
+      --gpu-memory-utilization 0.8
+      --max-num-batched-tokens 8192
+      --async-scheduling
+      --enable-expert-parallel
+      --compilation-config '{"cudagraph_mode":"FULL_DECODE_ONLY"}'
+      --enable-auto-tool-choice
+      --tool-call-parser hermes
+
+    restart: unless-stopped
+
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--timeout=5", "--output-document=/dev/null", "http://localhost:8000/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 120s
+
+  tmgenius-bge-large-zh-single:
+    image: mis-tei:7.1.RC1-800I-A2-aarch64
+    container_name: tmgenius-bge-large-zh-single
+    restart: unless-stopped
+    user: root
+    environment:
+      MODEL_NAME: BAAI/bge-large-zh-v1.5
+    ports:
+      - "8854:8080"
+    shm_size: 1g
+    working_dir: /home/HwHiAiUser
+    devices:
+      - /dev/davinci2 # 使用2号卡
+      - /dev/davinci_manager
+      - /dev/hisi_hdc
+      - /dev/devmm_svm
+    volumes:
+      - /usr/local/Ascend/driver:/usr/local/Ascend/driver:ro
+      - /usr/local/sbin:/usr/local/sbin:ro
+      - ./weights/bge-large-zh-v1.5:/home/HwHiAiUser/model/bge-large-zh-v1.5:ro
+    healthcheck:
+      test: ["CMD", "curl", "http://tmgenius-bge-large-zh-single:8080/embed", "-X", "POST", "-H", "Content-Type: application/json", "-d", "{\"inputs\":\"What is Deep Learning?\"}"]
+      interval: 300s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    entrypoint: /home/HwHiAiUser/start.sh
+    command: BAAI/bge-large-zh-v1.5 0.0.0.0 8080
+
+  tmgenius-vl-7b-single:
+    image: tmgenius/vllm-ascend:v0.19.1rc1
+    container_name: tmgenius-vl-7b-single
+    restart: unless-stopped
+    environment:
+      PYTORCH_NPU_ALLOC_CONF: "max_split_size_mb:256"
+    ports:
+      - "8860:8000"
+    devices:
+      - /dev/davinci3 # 使用3号卡
+      - /dev/davinci_manager
+      - /dev/devmm_svm
+      - /dev/hisi_hdc
+    volumes:
+      - /usr/local/dcmi:/usr/local/dcmi:ro
+      - /usr/local/bin/npu-smi:/usr/local/bin/npu-smi:ro
+      - /usr/local/Ascend/driver/lib64/:/usr/local/Ascend/driver/lib64/:ro
+      - /usr/local/Ascend/driver/version.info:/usr/local/Ascend/driver/version.info:ro
+      - /etc/ascend_install.info:/etc/ascend_install.info:ro
+      - ./weights/Qwen2.5-VL-7B-Instruct:/workspace/Qwen2.5-VL-7B-Instruct:ro
+      - ./healthcheck-vl-7b.sh:/healthcheck-vl-7b.sh:ro
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--timeout=5", "--output-document=/dev/null", "http://localhost:8000/v1/models"]
+      interval: 300s
+      timeout: 10s
+      retries: 3
+      start_period: 60s
+    command:
+      - bash
+      - -c
+      - |
+        (sleep 300; while true; do if ! bash /healthcheck-vl-7b.sh; then echo "[monitor] health check failed, restarting container..."; kill 1; fi; sleep 300; done) &
+        exec vllm serve /workspace/Qwen2.5-VL-7B-Instruct \
+          --served-model-name Qwen2.5-VL-7B-Instruct \
+          --dtype bfloat16 \
+          --max_model_len 16384 \
+          --max-num-batched-tokens 16384
+          
+  tmgenius-trans-hy-single:
+    image: tmgenius/vllm-ascend:v0.19.1rc1
+    container_name: tmgenius-trans-hy-single
+    restart: unless-stopped
+    privileged: true
+    environment:
+      ASCEND_VISIBLE_DEVICES: "2"
+      NPU_VISIBLE_DEVICES: "2"
+      ASCEND_RT_VISIBLE_DEVICES: "2"
+      PYTORCH_NPU_ALLOC_CONF: "max_split_size_mb:256"
+      # vLLM 启动配置
+      MODEL_PATH: "/workspace/HY-MT1.5-7B"
+      MODEL_NAME: "HY-MT1.5"
+      VLLM_PORT: "8000"
+      TENSOR_PARALLEL_SIZE: "1"
+      MAX_MODEL_LEN: "4096"
+      GPU_MEMORY_UTILIZATION: "0.4"
+      VLLM_EXTRA_ARGS: "--compilation-config {\"cudagraph_mode\":\"FULL_DECODE_ONLY\"}"
+      VLLM_STARTUP_TIMEOUT: "300"
+      # 代理服务配置
+      PROXY_PORT: "8858"
+      REQUEST_TIMEOUT: "120"
+      ENABLE_TEXT_SPLIT: "true"
+      # 翻译提示词模板 
+      TRANSLATION_PROMPT_TEMPLATE: "你是翻译助手，将{source_language_name}翻译成{target_language_name}。只输出翻译结果，保持原文语气。若是符号或无意义文本则输出空。"
+    ports:
+      - "8858:8858"
+      - "18000:8000"
+    devices:
+      - /dev/davinci2
+      - /dev/davinci_manager
+      - /dev/devmm_svm
+      - /dev/hisi_hdc
+    volumes:
+      - /usr/local/dcmi:/usr/local/dcmi:ro
+      - /usr/local/bin/npu-smi:/usr/local/bin/npu-smi:ro
+      - /usr/local/Ascend/driver/lib64/:/usr/local/Ascend/driver/lib64/:ro
+      - /usr/local/Ascend/driver/version.info:/usr/local/Ascend/driver/version.info:ro
+      - /etc/ascend_install.info:/etc/ascend_install.info:ro
+      - ./weights/HY-MT1.5-7B:/workspace/HY-MT1.5-7B:ro
+    healthcheck:
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--timeout=5", "--output-document=/dev/null", "http://localhost:8858/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 300s
+    command: python /workspace/translation_proxy.py

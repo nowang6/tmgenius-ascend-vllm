@@ -50,3 +50,5 @@ ENV LD_LIBRARY_PATH=/app/weights/vad/ten-vad/lib/Linux/aarch64:/usr/local/lib
 # ---- 6. vLLM 补丁（路径依赖 BASE_IMAGE 版本）----
 COPY src/connections.py /vllm-workspace/vllm/vllm/connections.py
 COPY src/translation_proxy.py /workspace/translation_proxy.py
+COPY healthcheck-vl-7b.sh /healthcheck-vl-7b.sh
+RUN chmod +x /healthcheck-vl-7b.sh
