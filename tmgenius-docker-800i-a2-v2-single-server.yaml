@@ -138,9 +138,8 @@ services:
       - /usr/local/Ascend/driver/version.info:/usr/local/Ascend/driver/version.info:ro
       - /etc/ascend_install.info:/etc/ascend_install.info:ro
       - ./weights/Qwen2.5-VL-7B-Instruct:/workspace/Qwen2.5-VL-7B-Instruct:ro
-      - ./healthcheck-vl-7b.sh:/healthcheck-vl-7b.sh:ro
     healthcheck:
-      test: ["CMD", "wget", "--quiet", "--tries=1", "--timeout=5", "--output-document=/dev/null", "http://localhost:8000/v1/models"]
+      test: ["CMD", "wget", "--quiet", "--tries=1", "--timeout=5", "--output-document=/dev/null", "http://localhost:8000/v1/health"]
       interval: 300s
       timeout: 10s
       retries: 3
@@ -231,8 +230,8 @@ services:
       WS_PORT: "8856"
       MAX_CONNECTIONS: "64"
       HANDSHAKE_TIMEOUT: "300"
-      WS_PING_INTERVAL: "3"
-      WS_PING_TIMEOUT: "6"
+      WS_PING_INTERVAL: "5"
+      WS_PING_TIMEOUT: "10"
       LOG_LEVEL: "DEBUG"
       # ---- vLLM ----
       VLLM_API_BASE: "http://127.0.0.1:15002/v1"
