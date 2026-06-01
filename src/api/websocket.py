@@ -98,7 +98,7 @@ async def websocket_endpoint(websocket: WebSocket) -> None:
         trace_id_var.set(session.trace_id)
 
         # 回复握手成功
-        await _send_response(websocket, session, status=0, seg_id=0)
+        await _send_response(websocket, session, status=0, seg_id=0, msgtype="")
         session.set_streaming()
 
         # 处理握手帧中携带的首帧音频
@@ -460,9 +460,10 @@ async def _send_response(
     status: int,
     seg_id: int,
     text: str = "",
+    msgtype: str = "sentence",
 ) -> None:
     """发送一个简单的状态响应。"""
-    result = ResultPayload(segId=seg_id, msgtype="sentence")
+    result = ResultPayload(segId=seg_id, msgtype=msgtype)
     if text:
         result.ws = [WSItem(cw=[CWItem(w=text)])]
 
